@@ -6,6 +6,7 @@ import hashlib
 from enum import Enum, auto
 from store_requests.bodys import get_token_body, get_card_token_body, get_order_body
 from store_requests.config import Config
+from store_requests.helpers import generate_order_number
 
 class RequestState(Enum):
     START = auto()
@@ -29,12 +30,7 @@ class YggPerformanceUser(HttpUser):
         self.auth_token = None
         self.card_access_token = None
         self.card_token = None
-        self.order_number = self.generate_order_number() #Gera um order_number e aloca para a order
-
-    def generate_order_number(self):
-        unique_str = f"{time.time()}{random.randint(0, 9999)}"
-        hash_str = hashlib.md5(unique_str.encode()).hexdigest()[:6].upper()
-        return f"EMECBFF{hash_str}"
+        self.order_number = generate_order_number() #Gera um order_number e aloca para a order
 
     @task
     def execute_flow(self):
@@ -123,25 +119,40 @@ class YggPerformanceUser(HttpUser):
             "Accept": "application/json",
             "Authorization": f"Bearer {self.auth_token}",
             "Content-Type": "application/json",
-            "X-Request-ID": self.order_number
+            "X-Request-ID": self.order_number,
+            "TENANT_ID": Config.TENANT_ID
         }
         
-        payload = get_order_body(
-            card_token=self.card_token,
-            order_number=self.order_number,
-            installments=random.randint(1, 3))
-        
-        with self.client.post("/external/bff/central/orders",
-                            headers=headers, name= "bff order",
-                            data=json.dumps(payload),
-                            timeout=self.request_timeout,
-                            catch_response=True) as response:
+        try:
+            payload = get_order_body(
+                card_token=self.card_token,
+                order_number=self.order_number,
+                installments=random.randint(1, 3),
+                auth_token=self.auth_token
+            )
             
-            if response.ok and response.json().get("success", False):
-                received_order = response.json().get("order_number", "N/A")
-                print(f"✅ Pedido concluído | Gerado: {self.order_number} | Recebido: {received_order}")
-                self.state = RequestState.COMPLETED
-            else:
-                error_msg = response.json().get("messages", ["Erro desconhecido"])[0]
-                response.failure(f"Falha no pedido: {error_msg} | Order: {self.order_number}")
-                self.state = RequestState.GOT_CARD_TOKEN  # Faz uma nova tentativa
+            with self.client.post("/external/bff/central/orders",
+                                headers=headers,
+                                name="bff order",
+                                data=json.dumps(payload),
+                                timeout=self.request_timeout,
+                                catch_response=True) as response:
+                
+                if response.ok:
+                    json_response = response.json()
+                    if json_response.get("success", False):
+                        received_order = json_response.get("order_number", "N/A")
+                        print(f"✅ Pedido concluído | Gerado: {self.order_number} | Recebido: {received_order}")
+                        self.state = RequestState.COMPLETED
+                    else:
+                        error_msg = json_response.get("messages", [{"key": "Error", "value": "Erro desconhecido"}])
+                        formatted_errors = ", ".join([f"{e['key']}: {e['value']}" for e in error_msg])
+                        response.failure(f"Falha no pedido: {formatted_errors} | Order: {self.order_number}")
+                        self.state = RequestState.GOT_CARD_TOKEN
+                else:
+                    response.failure(f"HTTP {response.status_code} - {response.text}")
+                    self.state = RequestState.GOT_CARD_TOKEN
+                    
+        except Exception as e:
+            print(f"⚠️ Erro ao criar pedido | Order: {self.order_number} | Erro: {str(e)}")
+            self.state = RequestState.GOT_CARD_TOKEN

@@ -1,5 +1,5 @@
 from store_requests.config import Config
-from store_requests.helpers import calculate_delivery_date, get_payment_method
+from store_requests.helpers import get_delivery_window, get_payment_method
 import random
 
 def get_token_body():
@@ -20,9 +20,37 @@ def get_card_token_body(access_token):
         "EnableTokenize": "true"
     }
 
-def get_order_body(card_token, order_number, installments=1):
+def get_delivery_window_query():
+    return {
+        "query": """
+        query ValidacaoDeliveryWindow($buyer_codes: [String!]!, $allowed_low_shelf_life: Boolean) {
+          get_person_delivery_window(
+            filters: {buyer_codes: $buyer_codes, allowed_low_shelf_life: $allowed_low_shelf_life, only_valids_delivery_windows: true}
+          ) {
+            items {
+              delivery_windows {
+                allowed_low_shelf_life
+                delivery_date
+              }
+            }
+          }
+        }
+        """,
+        "variables": {
+            "buyer_codes": ["0000247276"],
+            "allowed_low_shelf_life": True
+        }
+    }
+
+def get_order_body(card_token, order_number, installments=1, auth_token=None):
     if not all([card_token, order_number, 1 <= installments <= 3]):
         raise ValueError("Parâmetros inválidos para criação do pedido")
+    
+    if not auth_token:
+        raise ValueError("Token de autenticação é necessário para obter a janela de entrega")
+    
+    delivery_date = get_delivery_window(auth_token)
+
     items = [
         {
             "unit_of_measurement": "CX",
@@ -86,12 +114,12 @@ def get_order_body(card_token, order_number, installments=1):
                 "installments": installments,
                 "card_token": card_token
             },
-            "capture": False,
+            "capture": True,
             "amount": round(total_amount, 2)
         },
         "items": items,
         "ip": "",
-        "delivery_date": calculate_delivery_date(),
+        "delivery_date": delivery_date,
         "customer": {
             "sales_organization": "1684",
             "phone": "16 3322-5748",
