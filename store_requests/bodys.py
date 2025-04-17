@@ -17,7 +17,9 @@ def get_card_token_body(access_token):
         "Expiration": Config.CARD_EXPIRATION,
         "SecurityCode": Config.CARD_CVV,
         "AccessToken": access_token,
-        "EnableTokenize": "true"
+        "EnableTokenize": "true",
+        "EnableVerifyCard":"true",
+        "EnableBinQuery": "true"
     }
 
 def get_delivery_window_query():
